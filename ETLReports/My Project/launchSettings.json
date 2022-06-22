@@ -1,8 +1,0 @@
-{
-  "profiles": {
-    "DebugNetworkPathFile": {
-      "commandName": "Project",
-      "commandLineArgs": "--infile:z:\\temp\\xperf2.etl --processor:cpusample --outfile:z:\\temp\\xperf2_cpusample.csv"
-    }
-  }
-}
