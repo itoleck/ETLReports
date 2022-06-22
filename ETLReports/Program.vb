@@ -1747,8 +1747,8 @@ Module Program
         Console.WriteLine("<.CSV OUTPUTFILENAME>")
         Console.WriteLine("")
         Console.WriteLine("Example:")
-        Console.WriteLine("TestETLTracingDotNetCoreVB.exe c:\trace.etl processes c:\trace_processes.csv")
-        Console.WriteLine("TestETLTracingDotNetCoreVB.exe c:\trace.etl diskio c:\trace_diskio.csv")
+        Console.WriteLine("ETLReports.exe c:\trace.etl processes c:\trace_processes.csv")
+        Console.WriteLine("ETLReports.exe c:\trace.etl diskio c:\trace_diskio.csv")
         Console.WriteLine("")
         Console.WriteLine("* Only 1 <REPORTTYPE> can be specified each run. Run multiple times for more reports.")
         End
