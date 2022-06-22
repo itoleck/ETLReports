@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "DebugNetworkPathFile": {
+      "commandName": "Project",
+      "commandLineArgs": "\"Z:\\Temp\\avd\\W365\\8c-32GB-1\\CPC-chadas-D-6J.05-16-2022.14-21-10.Boot_1-compressed.etl\" bootphases \"Z:\\Temp\\avd\\W365\\8c-32GB-1\\CPC-chadas-D-6J.05-16-2022.14-21-10.Boot_1-compressed-bootphases.txt\""
+    }
+  }
+}
