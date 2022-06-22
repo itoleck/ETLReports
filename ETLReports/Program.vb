@@ -62,17 +62,23 @@ Module Program
 
             Console.ForegroundColor = ConsoleColor.Red
 
-            Try
-                filename = args(1).ToLower
-                processor = args(2).ToLower
-                outputfilename = args(3).ToLower
-            Catch ex As Exception
-                Console.WriteLine("Error in arguments. ")
-                For Each arg As String In Environment.GetCommandLineArgs()
-                    Console.Write(arg + " ")
-                Next arg
-                ShowHelp()
-            End Try
+            For Each arg In args
+                If arg.StartsWith("--infile:") Then
+                    filename = arg.Replace("'", "").Replace("""", "").Trim(" ").Remove(0, 9)
+                End If
+            Next
+
+            For Each arg In args
+                If arg.StartsWith("--outfile:") Then
+                    outputfilename = arg.Replace("'", "").Replace("""", "").Trim(" ").Remove(0, 10)
+                End If
+            Next
+
+            For Each arg In args
+                If arg.StartsWith("--processor:") Then
+                    processor = arg.Replace("'", "").Replace("""", "").Trim(" ").Remove(0, 12)
+                End If
+            Next
 
             If Not File.Exists(filename) Then
                 Console.WriteLine("File not found. " + filename)
@@ -104,7 +110,7 @@ Module Program
             Go()
         Else
             Console.ForegroundColor = ConsoleColor.Red
-            Console.WriteLine("No filename or processor specified.")
+            Console.WriteLine("No filenames or processor specified.")
             ShowHelp()
         End If
 
@@ -1738,17 +1744,18 @@ Module Program
     Private Sub ShowHelp()
         Console.ResetColor()
         Console.WriteLine("")
-        Console.WriteLine("Program will open and read a .etl trace and produce .csv formatted output to console based on the <REPORTTYPE> selected.")
+        Console.WriteLine("Program will open and read a .etl trace and produce .csv formatted output to console based on the --procesor: selected.")
         Console.WriteLine("")
         Console.WriteLine("Accepted arguments:")
         Console.WriteLine("h | -h | /h | help | -help | /help | ? | -? | /? Shows this help screen")
-        Console.WriteLine("<ETLFILENAME>")
-        Console.WriteLine("<REPORTTYPE> [processes tasks gpos winlogon pnp servicestates hardfaults diskio fileio providerinfo minifilter1ms minifiltersummary cpusample cpusamplenoidle bootphases processzombies]")
-        Console.WriteLine("<.CSV OUTPUTFILENAME>")
+        Console.WriteLine("--infile:<ETLFILENAME>")
+        Console.WriteLine("--processor:[processes tasks gpos winlogon pnp servicestates hardfaults diskio fileio providerinfo minifilter1ms minifiltersummary cpusample cpusamplenoidle bootphases processzombies]")
+        Console.WriteLine("--outfile:<.CSV OUTPUTFILENAME>")
         Console.WriteLine("")
         Console.WriteLine("Example:")
-        Console.WriteLine("ETLReports.exe c:\trace.etl processes c:\trace_processes.csv")
-        Console.WriteLine("ETLReports.exe c:\trace.etl diskio c:\trace_diskio.csv")
+        Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:processes --outfile:c:\trace_processes.csv")
+        Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:diskio --outfile:c:\trace_diskio.csv")
+        Console.WriteLine("ETLReports.exe --infile:'c:\trace with space in name.etl' --processor:cpusample --outfile:'c:\trace cpusample.csv'")
         Console.WriteLine("")
         Console.WriteLine("* Only 1 <REPORTTYPE> can be specified each run. Run multiple times for more reports.")
         End
