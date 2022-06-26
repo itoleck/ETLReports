@@ -2086,7 +2086,7 @@ Module Program
         Console.WriteLine("--outfolder:<.CSV Report OUTPUTFOLDER> (REQUIRED)")
         Console.WriteLine("--measure - Show start time, end time and count of events being processed in console")
         Console.WriteLine("")
-        Console.WriteLine("Example:")
+        Console.WriteLine("Examples:")
         Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:processes --outfolder:c:\")
         Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:diskio --outfolder:c:\")
         Console.WriteLine("ETLReports.exe --infile:'c:\trace with space in name.etl' --processor:cpusample --outfolder:'c:\'")
