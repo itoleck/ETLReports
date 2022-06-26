@@ -11,19 +11,25 @@ Imports Microsoft.Windows.EventTracing.Memory
 Imports Microsoft.Windows.EventTracing.Network
 Imports Microsoft.Windows.EventTracing.Processes
 Imports Microsoft.Windows.EventTracing.ScheduledTasks
+Imports Microsoft.Windows.EventTracing.Services
 Imports Microsoft.Windows.EventTracing.Symbols
 Imports Microsoft.Diagnostics.Tracing
 
 Module Program
 
-    Dim filename As String
-    Dim processor As String
-    Dim outputfilename As String
-    Dim tracesettings As New TraceProcessorSettings
+    Dim filename As String = ""                             '.etl file path from command arg
+    Dim processor As String = ""                           'processor from command arg
+    Dim outputfolder As String = ""                      'folder path from command arg
+    Dim outputfile As String = ""                           'computed full output file name from folder, file and processor
+    Dim milli As Int32 = 0                                      'For duration filters if supported by processor
+    Dim measureruntime As Boolean = False      'switch for showing trace processing stats in console
+    Dim measurestart As DateTime = Now          'Time processing of .etl began
+    Dim tracesettings As New TraceProcessorSettings     'Settings for allowing lost events and time inversion
 
     Sub Main()
         Main(Environment.GetCommandLineArgs())
     End Sub
+
     Private Sub Main(ByVal args() As String)
         If args.Length > 1 Then
 
@@ -60,7 +66,20 @@ Module Program
                     End
             End Select
 
-            Console.ForegroundColor = ConsoleColor.Red
+            'Console.ForegroundColor = ConsoleColor.Red
+
+            For Each arg In args
+                If arg.StartsWith("--measure") Then
+                    measureruntime = True
+                End If
+            Next
+
+            For Each arg In args
+                If arg.StartsWith("--ms:") Then
+                    milli = arg.Replace("'", "").Replace("""", "").Trim(" ").Remove(0, 5)
+                    milli = milli * 1000
+                End If
+            Next
 
             For Each arg In args
                 If arg.StartsWith("--infile:") Then
@@ -69,8 +88,9 @@ Module Program
             Next
 
             For Each arg In args
-                If arg.StartsWith("--outfile:") Then
-                    outputfilename = arg.Replace("'", "").Replace("""", "").Trim(" ").Remove(0, 10)
+                If arg.StartsWith("--outfolder:") Then
+                    outputfolder = arg.Replace("'", "").Replace("""", "").Trim(" ").Trim("\").Remove(0, 12)
+                    outputfolder = outputfolder + "\"
                 End If
             Next
 
@@ -85,11 +105,11 @@ Module Program
                 ShowHelp()
             End If
 
-            If (Path.GetFileName(outputfilename).Intersect(Path.GetInvalidFileNameChars()).Any() OrElse Path.GetDirectoryName(outputfilename).Intersect(Path.GetInvalidPathChars()).Any()) Then
-                Console.WriteLine("Output file not valid. " + outputfilename)
+            If (Path.GetDirectoryName(outputfolder).Intersect(Path.GetInvalidPathChars()).Any() Or Not Directory.Exists(outputfolder)) Then
+                Console.WriteLine("Output folder not valid. " + outputfolder)
                 ShowHelp()
             Else
-                File.Delete(outputfilename)
+                File.Delete(outputfolder + Path.GetFileNameWithoutExtension(filename) + "_" + processor + ".csv")
             End If
 
             If Nothing = filename Then
@@ -123,6 +143,12 @@ Module Program
         tracesettings.AllowLostEvents = True
         tracesettings.AllowTimeInversion = True
 
+        If measureruntime Then
+            Console.WriteLine(measurestart)
+        End If
+
+        outputfile = (outputfolder + Path.GetFileNameWithoutExtension(filename) + "_" + processor + ".csv")
+
         Select Case processor
             Case "processes"
                 Processes()
@@ -134,8 +160,8 @@ Module Program
                 Winlogon()
             Case "pnp"
                 PnP()
-            Case "servicestates"
-                ServiceStates()
+            Case "services"
+                Services()
             Case "hardfaults"
                 HardFaults()
             Case "diskio"
@@ -144,8 +170,8 @@ Module Program
                 FileIO()
             Case "providerinfo"
                 ProviderInfo()
-            Case "minifilter1ms"
-                MiniFilter1ms()
+            Case "minifilter"
+                MiniFilter()
             Case "minifiltersummary"
                 MiniFilterSummary()
             Case "cpusample"
@@ -162,16 +188,25 @@ Module Program
                 ShowHelp()
                 End
         End Select
+
+        If measureruntime Then
+            Console.WriteLine(vbLf)
+            Console.WriteLine(Now)
+        End If
+
     End Sub
 
     Private Sub CpuSample(ShowIdle As Boolean)
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("Process" + "," + "PID" + "," + "ParentPID" + "," + "TID" + "," + "Priority" + "," + "CPU" + "," + "User" + "," + "IsDPC" + "," + "IsISR" + "," + "Function" + "," + "Weight")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
 
                 Try
+                    Console.WriteLine("Loading symbols...")
                     Dim pendingsymbolData As IPendingResult(Of ISymbolDataSource) = trace.UseSymbols
                     Dim pendingData As IPendingResult(Of ICpuSampleDataSource) = trace.UseCpuSamplingData
+
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
 
                     Dim symbolData As ISymbolDataSource = pendingsymbolData.Result
@@ -179,87 +214,72 @@ Module Program
 
                     symbolData.LoadSymbolsAsync(SymCachePath.Automatic, SymbolPath.Automatic).GetAwaiter.GetResult()
 
-                    Dim count As Int32 = 0
+                    Dim count As Int32 = 1
                     Dim iserror As Boolean = False
 
                     'Dim pattern As IThreadStackPattern = AnalyzerThreadStackPattern.Parse("{imageName}!{functionName}")
+                    Dim pname As String = ""
+                    Dim pid As String = ""
+                    Dim p_pid As String = ""
+                    Dim user As String = ""
+                    Dim pri As String = ""
+                    Dim dpc As String = ""
+                    Dim isr As String = ""
+                    Dim proc As String = ""
+                    Dim tid As String = ""
+                    Dim funct As String = ""
+                    Dim weight As String = ""
 
                     For Each cpuinfo As ICpuSample In traceData.Samples
-                        Dim pname As String = ""
-                        Dim pid As String = ""
-                        Dim p_pid As String = ""
-                        Dim user As String = ""
-                        Dim pri As String = ""
-                        Dim dpc As String = ""
-                        Dim isr As String = ""
-                        Dim proc As String = ""
-                        Dim tid As String = ""
-                        Dim funct As String = ""
-                        Dim weight As String = ""
 
-                        Try
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
+
+                        If cpuinfo.Process.ImageName IsNot Nothing Then
                             pname = cpuinfo.Process.ImageName.ToString()
-                        Catch ex As Exception
+                        End If
 
-                        End Try
+                        pid = cpuinfo.Process.Id.ToString()
 
-                        Try
-                            pid = cpuinfo.Process.Id.ToString()
-                        Catch ex As Exception
-                        End Try
+                        p_pid = cpuinfo.Process.ParentId.ToString()
 
-                        Try
-                            p_pid = cpuinfo.Process.ParentId.ToString()
-                        Catch ex As Exception
-                        End Try
+                        If cpuinfo.Process.User.Value IsNot Nothing Then
+                            user = cpuinfo.Process.User.Value
+                        End If
 
-                        Try
-                            user = cpuinfo.Process.User.Value.ToString()
-                        Catch ex As Exception
-                        End Try
+                        pri = cpuinfo.Priority.ToString()
 
-                        Try
-                            pri = cpuinfo.Priority.ToString()
-                        Catch ex As Exception
-                        End Try
-
-                        Try
+                        If cpuinfo.IsExecutingDeferredProcedureCall IsNot Nothing Then
                             dpc = cpuinfo.IsExecutingDeferredProcedureCall.ToString()
-                        Catch ex As Exception
-                        End Try
+                        End If
 
-                        Try
+                        If cpuinfo.IsExecutingInterruptServicingRoutine IsNot Nothing Then
                             isr = cpuinfo.IsExecutingInterruptServicingRoutine.ToString()
-                        Catch ex As Exception
-                        End Try
+                        End If
 
+                        proc = cpuinfo.Processor.ToString()
+
+                        tid = cpuinfo.Thread.Id.ToString()
+
+                        'If StackWalk is not captured skip
+                        'TODO
                         Try
-                            proc = cpuinfo.Processor.ToString()
+                            If cpuinfo.Stack.Frames IsNot Nothing Then
+                                For Each f In cpuinfo.Stack.Frames
+                                    If f.Symbol IsNot Nothing Then
+                                        funct = funct + f.Symbol.FunctionName + "<"
+                                    End If
+                                Next
+                            End If
                         Catch ex As Exception
+                            'Console.WriteLine(vbLf + ex.Message + vbLf + "Frame symbol missing for " + cpuinfo.Process.ImageName)
                         End Try
 
-                        Try
-                            tid = cpuinfo.Thread.Id.ToString()
-                        Catch ex As Exception
-                        End Try
 
-                        Try
-                            For Each f In cpuinfo.Stack.Frames
-                                Try
-                                    funct = funct + f.Symbol.FunctionName + "<"
-                                Catch ex As Exception
-
-                                End Try
-
-                            Next
-                        Catch ex As Exception
-                        End Try
-
-                        Try
-                            weight = cpuinfo.Weight.TotalMicroseconds.ToString()
-                        Catch ex As Exception
-
-                        End Try
+                        weight = cpuinfo.Weight.TotalMicroseconds.ToString()
 
                         If (pname <> "Idle") Then
                             wr.WriteLine(pname + "," + pid + "," + p_pid + "," + tid + "," + pri + "," + proc + "," + user + "," + dpc + "," + isr + ",""" + funct + """," + weight)
@@ -272,6 +292,17 @@ Module Program
                         End If
 
                         count += 1
+                        pname = ""
+                        pid = ""
+                        p_pid = ""
+                        user = ""
+                        pri = ""
+                        dpc = ""
+                        isr = ""
+                        proc = ""
+                        tid = ""
+                        funct = ""
+                        weight = ""
 
                     Next
 
@@ -286,16 +317,24 @@ Module Program
     End Sub
 
     Private Sub MiniFilterSummary()
-        Using wr As New StreamWriter(outputfilename, True)
-            wr.WriteLine("Filter" + "," + "TotalDuration" + "," + "Publisher" + "," + "ProductName" + "," + "Description" + "," + "Version" + "," + "Checksum")
+        Using wr As New StreamWriter(outputfile, True)
+            wr.WriteLine("Filter" + "," + "TotalDuration-ms" + "," + "Publisher" + "," + "ProductName" + "," + "Description" + "," + "Version" + "," + "Checksum")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim pendingMinifilterData As IPendingResult(Of IMinifilterDataSource) = trace.UseMiniffilterDelayIntervalData
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim traceData As IMinifilterDataSource = pendingMinifilterData.Result
                     Dim count As Int32 = 0
                     Dim iserror As Boolean = False
                     Dim Filters As New DataTable
+                    Dim filter As String = ""
+                    Dim dur As Decimal = 0
+                    Dim pub As String = ""
+                    Dim product As String = ""
+                    Dim ver As String = ""
+                    Dim desc As String = ""
+                    Dim md5 As String = ""
 
                     Filters.Columns.Add("filter", GetType(System.String))
                     Filters.Columns.Add("duration", GetType(System.Decimal))
@@ -306,34 +345,72 @@ Module Program
                     Filters.Columns.Add("md5", GetType(System.String))
 
                     For Each mfinfo As IMinifilterDelayInterval In traceData.DelayIntervals
-                        Dim filter As String = ""
-                        Dim dur As Decimal = 0
-                        Dim pub As String = ""
-                        Dim product As String = ""
-                        Dim ver As String = ""
-                        Dim desc As String = ""
-                        Dim md5 As String = ""
 
-                        filter = mfinfo.FilterImage.FileName.ToString()
-
-                        If mfinfo.Duration.HasValue Then
-                            dur = mfinfo.Duration.TotalMilliseconds
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
                         End If
 
-                        pub = mfinfo.FilterImage.CompanyName.ToString()
-                        product = mfinfo.FilterImage.ProductName.ToString()
-                        ver = mfinfo.FilterImage.FileVersion.ToString()
-                        desc = mfinfo.FilterImage.FileDescription.ToString()
-                        md5 = mfinfo.FilterImage.Checksum.ToString()
+                        Try
+                            filter = mfinfo.FilterImage.FileName.ToString()
+                        Catch ex As Exception
+                            iserror = True
+                        End Try
 
-                        Filters.Rows.Add(filter, dur, pub, product, desc, ver, md5)
+                        Try
+                            dur = mfinfo.Duration.TotalMilliseconds
+                        Catch ex As Exception
+                            iserror = True
+                        End Try
+
+                        Try
+                            pub = mfinfo.FilterImage.CompanyName.ToString()
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            product = mfinfo.FilterImage.ProductName.ToString()
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            ver = mfinfo.FilterImage.FileVersion.ToString()
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            desc = mfinfo.FilterImage.FileDescription.ToString()
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            md5 = mfinfo.FilterImage.Checksum.ToString()
+                        Catch ex As Exception
+
+                        End Try
+
+                        'Only add data if there was a filter and duration. Other fields can be empty.
+                        If Not iserror Then
+                            Filters.Rows.Add(filter, dur, pub, product, desc, ver, md5)
+                        End If
+
+                        filter = ""
+                        dur = 0
+                        product = ""
+                        ver = ""
+                        desc = ""
+                        md5 = ""
                     Next
 
                     Dim distinctFilters As DataTable = Filters.DefaultView.ToTable(True, "filter", "publisher", "product", "description", "version", "md5")
 
                     For Each row As DataRow In distinctFilters.Rows
                         Dim totaldur As Decimal = 0
-
 
                         For Each row2 As DataRow In Filters.Rows
                             If row("filter") = row2("filter") Then
@@ -355,15 +432,16 @@ Module Program
         End Using
     End Sub
 
-    Private Sub MiniFilter1ms()
-        Using wr As New StreamWriter(outputfilename, True)
+    Private Sub MiniFilter()
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "FilterName" + """,""" + "FilePath" + """,""" + "ProcessID" + """,""" + "ThreadID" + """,""" + "Duration" + """,""" + "StartTime" + """,""" + "StopTime" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim pendingMinifilterData As IPendingResult(Of IMinifilterDataSource) = trace.UseMiniffilterDelayIntervalData
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim traceData As IMinifilterDataSource = pendingMinifilterData.Result
-                    Dim count As Int32 = 0
+                    Dim count As Int32 = 1
                     Dim iserror As Boolean = False
                     Dim filepath As String = ""
                     Dim pid As Int32 = -1
@@ -375,7 +453,13 @@ Module Program
 
                     Debug.WriteLine(traceData.DelayIntervals.Count)
 
+                    Console.WriteLine("Saving all minifilter events >= " + milli.ToString + "ms")
+
                     For Each mfinfo As IMinifilterDelayInterval In traceData.DelayIntervals
+
+                        Console.CursorTop = 3
+                        Console.CursorLeft = 0
+                        Console.Write("Events Processed: " + count.ToString)
 
                         Try
                             dur = mfinfo.Duration.TotalMicroseconds
@@ -383,7 +467,7 @@ Module Program
                             iserror = True
                         End Try
 
-                        If dur >= 1 Then
+                        If dur >= milli Then
                             Try
                                 filepath = mfinfo.FilePath.ToString()
                             Catch ex As Exception
@@ -403,12 +487,6 @@ Module Program
                             End Try
 
                             Try
-                                filter = mfinfo.FilterImage.FileName.ToString()
-                            Catch ex As Exception
-                                iserror = True
-                            End Try
-
-                            Try
                                 starttime = mfinfo.StartTime.TotalMicroseconds
                             Catch ex As Exception
 
@@ -420,12 +498,17 @@ Module Program
 
                             End Try
 
+                            Try
+                                filter = mfinfo.FilterImage.FileName
+                            Catch ex As Exception
+                                iserror = True
+                            End Try
+
                             If iserror = False Then
+                                count += 1
                                 wr.WriteLine("""" + filter + """,""" + filepath + """,""" + pid.ToString() + """,""" + tid.ToString() + """,""" + dur.ToString() + """,""" + starttime.ToString() + """,""" + stoptime.ToString() + """")
                                 wr.Flush()
                             End If
-
-                            count += 1
 
                         End If
 
@@ -439,9 +522,12 @@ Module Program
                         stoptime = -1
 
                     Next
+
+                    Console.WriteLine(vbLf + "Percent of events >= " + milli.ToString + "ms: " + (count / traceData.DelayIntervals.Count * 100).ToString)
+
                 Catch ex As Exception
                     Console.ForegroundColor = ConsoleColor.Red
-                    Console.WriteLine(ex.Message)
+                    Console.WriteLine(vbLf + ex.Message)
                     ShowHelp()
                 End Try
 
@@ -450,10 +536,12 @@ Module Program
     End Sub
 
     Private Sub ProviderInfo()
-        Using wr As New StreamWriter(outputfilename, True)
+        Console.WriteLine(outputfile)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "ProviderType" + """,""" + "ProviderID" + """,""" + "ProviderName" + """,""" + "DataSize" + """,""" + "EventSize" + """,""" + "HeaderSize" + """,""" + "ExtendedSize" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Dim pendingTraceData As IPendingResult(Of ITraceStatisticsDataSource) = trace.UseTraceStatistics
+                Console.WriteLine("Processing file: " + filename)
                 trace.Process()
                 Dim traceData As ITraceStatisticsDataSource = pendingTraceData.Result
                 Dim count As Int32 = 0
@@ -526,10 +614,11 @@ Module Program
     End Sub
 
     Private Sub FileIO()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "EventType" + """,""" + "Path" + """,""" + "FileDuration-ms" + """,""" + "ErrorCode" + """,""" + "ProcessName" + """,""" + "ProcessID" + """,""" + "Thread" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Dim pendingFileData As IPendingResult(Of IFileActivityDataSource) = trace.UseFileIOData()
+                Console.WriteLine("Processing file: " + filename)
                 trace.Process()
                 Dim fileioData As IFileActivityDataSource = pendingFileData.Result
                 Dim count As Int32 = 0
@@ -548,6 +637,12 @@ Module Program
 
                 Try
                     For Each fileio As IFileActivity In fileioData.ReadFileActivity
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
 
                         Try
                             path = fileio.Path.Trim("""")
@@ -738,12 +833,140 @@ Module Program
         End Using
     End Sub
 
-    Private Sub DiskIO()
-        Using wr As New StreamWriter(outputfilename, True)
-            wr.WriteLine("""" + "Disk" + """,""" + "Path" + """,""" + "IODuration-us" + """,""" + "IOSize" + """,""" + "Bandwidth" + """,""" + "IOType" + """,""" + "CommandLine" + """,""" + "Thread" + """,""" + "IOPriority" + """,""" + "QueueDepthInit" + """,""" + "QueueDepthComplete" + """")
+    Private Sub DiskIOSummary()
+
+        'Will use milliseconds for all durations instead of microseconds for better latency understanding in report
+        'If fields are null, 0, -1 or an error occurs the event will be skipped to preserve best possible aggregate inforation at the expense of missing data
+
+        Using wr As New StreamWriter(outputfile, True)
+            wr.WriteLine("""" + "Disk" + """,""" + "IOType" + """,""" + "Aggregate" + """,""" + "Min" + """,""" + "Max" + """,""" + "Avg" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim pendingDiskData As IPendingResult(Of IDiskActivityDataSource) = trace.UseDiskIOData()
+                    Console.WriteLine("Processing file: " + filename)
+                    trace.Process()
+                    Dim diskioData As IDiskActivityDataSource = pendingDiskData.Result
+                    Dim count As Int32 = 0
+                    Dim iserror As Boolean = False
+                    Dim disknum As Int16 = -1
+                    Dim iotype As Int16 = -1
+                    Dim iopriority As Int16 = -1
+                    Dim iosize As Int64 = -1
+                    Dim ioduration As Decimal = -1
+                    Dim disksvcduration As Decimal = -1
+                    Dim qdepthinit As Int32 = -1
+                    Dim qdepthcomplete As Int32 = -1
+                    Dim diskbandwidth As Decimal = -1
+                    Dim stackbandwidth As Decimal = -1
+                    Dim filterduration As Decimal = -1
+                    Dim Filters As New DataTable
+
+                    Filters.Columns.Add("disk", GetType(System.String))
+                    Filters.Columns.Add("iotype", GetType(System.String))
+                    Filters.Columns.Add("iopriority", GetType(System.String))
+                    Filters.Columns.Add("iosize", GetType(System.Int64))
+                    Filters.Columns.Add("ioduration", GetType(System.Int64))
+                    Filters.Columns.Add("disksvcduration", GetType(System.Int64))
+                    Filters.Columns.Add("qdepthinit", GetType(System.Int32))
+                    Filters.Columns.Add("qdepthcomplete", GetType(System.Int32))
+                    Filters.Columns.Add("diskbandwidth", GetType(System.Int64))
+                    Filters.Columns.Add("stackbandwidth", GetType(System.Int64))
+                    Filters.Columns.Add("filterduration", GetType(System.Int64))
+
+                    Debug.WriteLine(diskioData.Activity.Count)
+
+                    'Fill datatable with the data
+                    For Each diskio As IDiskActivity In diskioData.Activity
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
+
+                        Try
+                            disknum = diskio.Disk
+                        Catch ex As Exception
+                            iserror = True
+                        End Try
+
+                        Try
+                            If Nothing <> diskio.IOType Then
+                                Select Case diskio.IOType
+                                    Case -1
+                                        iotype = "unknown"
+                                    Case 0
+                                        iotype = "read"
+                                    Case 1
+                                        iotype = "write"
+                                    Case 2
+                                        iotype = "flush"
+                                End Select
+                            End If
+                        Catch ex As Exception
+                            iotype = "unknown"
+                        End Try
+
+                        Try
+                            If Nothing <> diskio.Priority Then
+                                Select Case diskio.Priority
+                                    Case 0
+                                        iopriority = "verylow"
+                                    Case 1
+                                        iopriority = "low"
+                                    Case 2
+                                        iopriority = "normal"
+                                    Case 3
+                                        iopriority = "high"
+                                    Case 4
+                                        iopriority = "critical"
+                                End Select
+                            End If
+                        Catch ex As Exception
+                            iopriority = "unknown"
+                        End Try
+
+
+
+                        If iserror = False Then
+                            Filters.Rows.Add(disknum, iotype, iopriority, iosize, ioduration, disksvcduration, qdepthinit, qdepthcomplete, diskbandwidth, stackbandwidth, filterduration)
+                        End If
+
+                        count += 1
+                        iserror = False
+                        disknum = -1
+                        iotype = -1
+                        iopriority = -1
+                        iosize = -1
+                        ioduration = -1
+                        disksvcduration = -1
+                        qdepthinit = -1
+                        qdepthcomplete = -1
+                        diskbandwidth = -1
+                        stackbandwidth = -1
+                        filterduration = -1
+                    Next
+
+                    'Process each aggregate, iopriority, iotype and disk
+                    'Datatable provides distinct column values??? Would be easier
+                    'Aggregates: Size, Disk Duration, Disk Stack Duration, Filter and Que Duration, Disk Bandwidth Bytes, Disk Stack Bandwidth Bytes, Que Depth Init, Que Depth Complete
+
+
+
+                Catch ex As Exception
+
+                End Try
+            End Using
+        End Using
+    End Sub
+
+    Private Sub DiskIO()
+        Using wr As New StreamWriter(outputfile, True)
+            wr.WriteLine("""" + "Disk" + """,""" + "Path" + """,""" + "DiskDuration-us" + """,""" + "DiskStackDuration-us" + """,""" + "FilterandQueDuration-us" + """,""" + "IOSizeBytes" + """,""" + "DiskBandwidthBytes-Calculated" + """,""" + "DiskStackBandwidthBytes-Calculated" + """,""" + "IOType" + """,""" + "CommandLine" + """,""" + "Thread" + """,""" + "IOPriority" + """,""" + "QueueDepthInit" + """,""" + "QueueDepthComplete" + """")
+            Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
+                Try
+                    Dim pendingDiskData As IPendingResult(Of IDiskActivityDataSource) = trace.UseDiskIOData()
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim diskioData As IDiskActivityDataSource = pendingDiskData.Result
                     Dim count As Int32 = 0
@@ -752,18 +975,26 @@ Module Program
                     Dim path As String = ""
                     Dim ioduration As Int64 = -1
                     Dim iosize As Int64 = -1
-                    ' Dim disksvcduration = -1
+                    Dim disksvcduration As Int64 = -1
                     Dim iotype As Int16 = -1
                     Dim ioprocess As String = ""
                     Dim iothread As Int32 = -1
                     Dim iopriority As Int16 = -1
                     Dim qdepthinit As Int32 = -1
                     Dim qdepthcomplete As Int32 = -1
-                    Dim bandwidth As Int64 = -1
+                    Dim diskbandwidth As Int64 = -1
+                    Dim stackbandwidth As Int64 = -1
+                    Dim filterduration As Int64 = -1
 
                     Debug.WriteLine(diskioData.Activity.Count)
 
                     For Each diskio As IDiskActivity In diskioData.Activity
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
 
                         Try
                             disknum = diskio.Disk
@@ -793,9 +1024,9 @@ Module Program
                             iserror = True
                         End Try
 
-                        'If Nothing <> diskio.DiskServiceDuration Then
-                        '    disksvcduration = diskio.DiskServiceDuration.TotalMicroseconds
-                        'End If
+                        If Nothing <> diskio.DiskServiceDuration Then
+                            disksvcduration = diskio.DiskServiceDuration.TotalMicroseconds
+                        End If
 
                         Try
                             If Nothing <> diskio.IOType Then
@@ -841,15 +1072,24 @@ Module Program
 
                         End Try
 
-
                         If iosize <> 0 And iosize <> -1 And ioduration <> 0 And ioduration <> -1 Then
-                            bandwidth = ((ioduration * 1000000) / iosize)
+                            stackbandwidth = ((1000000 / ioduration) * iosize)
                         Else
-                            bandwidth = 0
+                            stackbandwidth = 0
+                        End If
+
+                        If iosize <> 0 And iosize <> -1 And disksvcduration <> 0 And disksvcduration <> -1 Then
+                            diskbandwidth = ((1000000 / disksvcduration) * iosize)
+                        Else
+                            diskbandwidth = 0
+                        End If
+
+                        If disksvcduration <> -1 And ioduration <> -1 Then
+                            filterduration = ioduration - disksvcduration
                         End If
 
                         If iserror = False Then
-                            wr.WriteLine("""" + disknum.ToString() + """,""" + path.ToString() + """,""" + ioduration.ToString() + """,""" + iosize.ToString() + """,""" + bandwidth.ToString() + """,""" + iotype.ToString() + """,""" + ioprocess.Trim("""").ToString() + """,""" + iothread.ToString() + """,""" + iopriority.ToString() + """,""" + qdepthinit.ToString() + """,""" + qdepthcomplete.ToString() + """")
+                            wr.WriteLine("""" + disknum.ToString() + """,""" + path.ToString() + """,""" + disksvcduration.ToString() + """,""" + ioduration.ToString() + """,""" + filterduration.ToString() + """,""" + iosize.ToString() + """,""" + diskbandwidth.ToString() + """,""" + stackbandwidth.ToString() + """,""" + iotype.ToString() + """,""" + ioprocess.Trim("""").ToString() + """,""" + iothread.ToString() + """,""" + iopriority.ToString() + """,""" + qdepthinit.ToString() + """,""" + qdepthcomplete.ToString() + """")
                             wr.Flush()
 
                         Else
@@ -861,6 +1101,7 @@ Module Program
                         disknum = -1
                         path = ""
                         ioduration = -1
+                        disksvcduration = -1
                         iosize = -1
                         iotype = -1
                         ioprocess = ""
@@ -868,7 +1109,9 @@ Module Program
                         iopriority = -1
                         qdepthinit = -1
                         qdepthcomplete = -1
-                        bandwidth = -1
+                        diskbandwidth = -1
+                        stackbandwidth = -1
+                        filterduration = -1
 
                     Next
                 Catch ex As Exception
@@ -881,7 +1124,7 @@ Module Program
     End Sub
 
     Private Sub HardFaults()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "Process" + """,""" + "ProcessPID" + """,""" + "Thread" + """,""" + "Path" + """,""" + "AvgIOTime-ms" + """,""" + "ByteCount" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
@@ -977,69 +1220,106 @@ Module Program
         End Using
     End Sub
 
-    Private Sub ServiceStates()
-        Using wr As New StreamWriter(outputfilename, True)
-            wr.WriteLine("""" + "Provider" + """,""" + "Timestamp" + """,""" + "Task" + """,""" + "CPU" + """,""" + "Thread" + """")
+    Private Sub Services()
+        Using wr As New StreamWriter(outputfile, True)
+            wr.WriteLine("""" + "Service" + """,""" + "StartType" + """,""" + "Image" + """,""" + "PID" + """,""" + "State" + """,""" + "Time" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
-                    Dim provids = New Guid() {New Guid("b8ddcea7-b520-4909-bceb-e0170c9f0e99")}
-                    Dim pendingSvcStatesData As IPendingResult(Of IGenericEventDataSource) = trace.UseGenericEvents(provids)
+                    'Oops, I have no idea where I got this provider GUID from. It was the original and no trace I open has it. Must be classic provider, no name.
+                    'Dim provids = New Guid() {New Guid("b8ddcea7-b520-4909-bceb-e0170c9f0e99")}
+
+                    'Microsoft-Windows-Services Provider GUID {0063715b-eeda-4007-9429-ad526f62696e}
+                    'Dim provids = New Guid() {New Guid("0063715b-eeda-4007-9429-ad526f62696e")}
+                    'Dim pendingSvcStatesData As IPendingResult(Of IGenericEventDataSource) = trace.UseGenericEvents(provids)
+
+                    Dim pendingSvcStatesData As IPendingResult(Of IServiceDataSource) = trace.UseServices
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
-                    Dim SvcStateData As IGenericEventDataSource = pendingSvcStatesData.Result
-                    Dim count As Int32 = 0
+                    Dim SvcStateData As IServiceDataSource = pendingSvcStatesData.Result
+                    Dim count As Int32 = 1
                     Dim iserror As Boolean = False
-                    Dim provider As String = ""
-                    Dim timestamp As String = ""
-                    Dim task As String = ""
-                    Dim cpu As String = ""
-                    Dim thread As String = ""
+                    Dim name As String = ""
+                    Dim starttype As String = ""
+                    Dim imagename As String = ""
+                    Dim pid As String = ""
+                    Dim state As String = ""
+                    Dim starttime As Decimal = -1
+                    Dim Filters As New DataTable
 
-                    For Each svcstate As IGenericEvent In SvcStateData.Events
+                    Filters.Columns.Add("svcname", GetType(System.String))
+                    Filters.Columns.Add("starttype", GetType(System.String))
+                    Filters.Columns.Add("imagename", GetType(System.String))
+                    Filters.Columns.Add("pid", GetType(System.String))
+                    Filters.Columns.Add("state", GetType(System.String))
+                    Filters.Columns.Add("starttime", GetType(System.Decimal))
 
-                        Try
-                            provider = svcstate.ProviderName
-                        Catch ex As Exception
+                    For Each svcstate As IService In SvcStateData.Services
 
-                        End Try
-
-                        Try
-                            timestamp = svcstate.Timestamp.TotalSeconds.ToString()
-                        Catch ex As Exception
-
-                        End Try
-
-                        Try
-                            task = svcstate.TaskName.ToString()
-                        Catch ex As Exception
-
-                        End Try
-
-                        Try
-                            cpu = svcstate.Processor.ToString()
-                        Catch ex As Exception
-
-                        End Try
-
-                        Try
-                            thread = svcstate.ThreadId.ToString()
-                        Catch ex As Exception
-
-                        End Try
-
-                        If task = "AutoStartPhaseStart" Or task = "AutoStartPhaseComplete" Or task = "DelayStartPhaseStart" Or task = "DelayStartPhaseComplete" Then
-                            wr.WriteLine("""" + provider + """,""" + timestamp + """,""" + task + """,""" + cpu + """,""" + thread + """")
-                            wr.Flush()
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
                         End If
+
+                        Try
+                            name = svcstate.Name
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            starttype = svcstate.StartType.ToString
+                        Catch ex As Exception
+
+                        End Try
+
+                        For Each change In svcstate.StateChanges
+                            Try
+                                imagename = change.ImageName.ToString
+                            Catch ex As Exception
+
+                            End Try
+
+                            Try
+                                pid = change.ProcessId.ToString
+                            Catch ex As Exception
+
+                            End Try
+
+                            Try
+                                state = change.State.ToString
+                            Catch ex As Exception
+
+                            End Try
+
+                            Try
+                                starttime = change.Timestamp.TotalMilliseconds
+                            Catch ex As Exception
+
+                            End Try
+
+                            If Not iserror Then
+                                Filters.Rows.Add(name, starttype, imagename, pid, state, starttime)
+                            End If
+
+                            imagename = ""
+                            pid = ""
+                            state = ""
+                            starttime = -1
+                        Next
 
                         count += 1
                         iserror = False
-                        provider = ""
-                        timestamp = ""
-                        task = ""
-                        cpu = ""
-                        thread = ""
+                        name = ""
+                        starttype = ""
 
                     Next
+
+                    For Each row As DataRow In Filters.Rows
+                        wr.WriteLine("""" + row("svcname") + """,""" + row("starttype") + """,""" + row("imagename") + """,""" + row("pid") + """,""" + row("State") + """,""" + row("starttime").ToString + """")
+                        wr.Flush()
+                    Next
+
                 Catch ex As Exception
                     Console.ForegroundColor = ConsoleColor.Red
                     Console.WriteLine(ex.Message)
@@ -1050,12 +1330,13 @@ Module Program
     End Sub
 
     Private Sub PnP()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "Provider" + """,""" + "Timestamp" + """,""" + "Field1" + """,""" + "Message" + """,""" + "Task" + """,""" + "Opcode" + """,""" + "CPU" + """,""" + "PID" + """,""" + "Thread" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim provids = New Guid() {New Guid("9c205a39-1250-487d-abd7-e831c6290539")}
                     Dim pendingPnPData As IPendingResult(Of IGenericEventDataSource) = trace.UseGenericEvents(provids)
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim PnPData As IGenericEventDataSource = pendingPnPData.Result
                     Dim count As Int32 = 0
@@ -1072,6 +1353,12 @@ Module Program
                     Dim thread As Int32 = -1
 
                     For Each pnp As IGenericEvent In PnPData.Events
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
 
                         Try
                             provider = pnp.ProviderName
@@ -1169,11 +1456,12 @@ Module Program
     End Sub
 
     Private Sub Tasks()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "TaskName" + """,""" + "ExitCode" + """,""" + "Start" + """,""" + "End" + """,""" + "TriggerStart" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim pendingTaskData As IPendingResult(Of IScheduledTaskDataSource) = trace.UseScheduledTasks()
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim taskData As IScheduledTaskDataSource = pendingTaskData.Result
                     Dim count As Int32 = 0
@@ -1185,6 +1473,12 @@ Module Program
                     Dim starttrigger As Decimal = -1
 
                     For Each task As IScheduledTask In taskData.Tasks
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
 
                         Try
                             name = task.FullName
@@ -1243,12 +1537,13 @@ Module Program
     End Sub
 
     Private Sub Winlogon()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "Provider" + """,""" + "Timestamp" + """,""" + "Task" + """,""" + "Message" + """,""" + "CPU" + """,""" + "PID" + """,""" + "Thread" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim provids = New Guid() {New Guid("dbe9b383-7cf3-4331-91cc-a3cb16a3b538")}
                     Dim pendingWinlogonData As IPendingResult(Of IGenericEventDataSource) = trace.UseGenericEvents(provids)
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim WinlogonData As IGenericEventDataSource = pendingWinlogonData.Result
                     Dim count As Int32 = 0
@@ -1264,6 +1559,12 @@ Module Program
                     'Dim value As Microsoft.Windows.EventTracing.Events.IGenericEventField
 
                     For Each logon As IGenericEvent In WinlogonData.Events
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
 
                         Try
                             provider = logon.ProviderName
@@ -1339,11 +1640,12 @@ Module Program
     End Sub
 
     Private Sub Processes()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "ProcessName" + """,""" + "ProcessPID" + """,""" + "ParentPID" + """,""" + "Start" + """,""" + "End" + """,""" + "Duration" + """,""" + "SessionID" + """,""" + "UserSID" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim pendingProcessData As IPendingResult(Of IProcessDataSource) = trace.UseProcesses()
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim processData As IProcessDataSource = pendingProcessData.Result
                     Dim count As Int32 = 0
@@ -1357,6 +1659,12 @@ Module Program
                     Dim user As String = ""
 
                     For Each process As IProcess In processData.Processes
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
 
                         Try
                             imagename = process.ImageName.ToString()
@@ -1428,12 +1736,13 @@ Module Program
     End Sub
 
     Private Sub GPOS()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "Provider" + """,""" + "Timestamp" + """,""" + "Field1" + """,""" + "Value1" + """,""" + "Message" + """,""" + "CPU" + """,""" + "PID" + """,""" + "Thread" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim provids = New Guid() {New Guid("aea1b4fa-97d1-45f2-a64c-4d69fffd92c9")}
                     Dim pendingGPOData As IPendingResult(Of IGenericEventDataSource) = trace.UseGenericEvents(provids)
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim GPOData As IGenericEventDataSource = pendingGPOData.Result
                     Dim value As Microsoft.Windows.EventTracing.Events.IGenericEventField
@@ -1450,6 +1759,12 @@ Module Program
 
 
                     For Each gpo As IGenericEvent In GPOData.Events
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
 
                         Try
                             provider = gpo.ProviderName
@@ -1537,15 +1852,16 @@ Module Program
     End Sub
 
     Private Sub BootPhases()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "BootPhase" + """,""" + "Start" + """,""" + "End" + """,""" + "Duration" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
 
                     Dim pendingProcessData As IPendingResult(Of IProcessDataSource) = trace.UseProcesses()
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim processData As IProcessDataSource = pendingProcessData.Result
-                    Dim count As Int32 = 0
+                    Dim count As Int32 = 1
                     Dim iserror As Boolean = False
                     Dim phase As String = ""
                     Dim starttime As Decimal = 0
@@ -1557,6 +1873,12 @@ Module Program
                     Dim collogonui As New Collection()
 
                     For Each process As IProcess In processData.Processes
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
 
                         Dim objcsrss As New BootPhase()
                         Dim objsmss As New BootPhase()
@@ -1722,16 +2044,26 @@ Module Program
     End Sub
 
     Private Sub ProcessZombies()
-        Using wr As New StreamWriter(outputfilename, True)
+        Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("""" + "BootPhase" + """,""" + "Start" + """,""" + "End" + """,""" + "Duration" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
+                    Dim count As Int32 = 1
                     Dim pendingProcessData As IPendingResult(Of IProcessDataSource) = trace.UseProcesses()
+                    Console.WriteLine("Processing file: " + filename)
                     trace.Process()
                     Dim processData As IProcessDataSource = pendingProcessData.Result
 
                     For Each process As IProcess In processData.Processes
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
+
                         'Console.WriteLine(process.)
+                        count += 1
                     Next
 
                 Catch
@@ -1748,16 +2080,19 @@ Module Program
         Console.WriteLine("")
         Console.WriteLine("Accepted arguments:")
         Console.WriteLine("h | -h | /h | help | -help | /help | ? | -? | /? Shows this help screen")
-        Console.WriteLine("--infile:<ETLFILENAME>")
-        Console.WriteLine("--processor:[processes tasks gpos winlogon pnp servicestates hardfaults diskio fileio providerinfo minifilter1ms minifiltersummary cpusample cpusamplenoidle bootphases processzombies]")
-        Console.WriteLine("--outfile:<.CSV OUTPUTFILENAME>")
+        Console.WriteLine("--infile:<ETLFILENAME> (REQUIRED)")
+        Console.WriteLine("--processor:[processes tasks gpos winlogon pnp services hardfaults diskio fileio providerinfo minifilter minifiltersummary cpusample cpusamplenoidle bootphases processzombies] (REQUIRED)")
+        Console.WriteLine("--ms:<MILLISECONDS> - Used with minifilter procesor to specify how many milliseconds above to save events")
+        Console.WriteLine("--outfolder:<.CSV Report OUTPUTFOLDER> (REQUIRED)")
+        Console.WriteLine("--measure - Show start time, end time and count of events being processed in console")
         Console.WriteLine("")
         Console.WriteLine("Example:")
-        Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:processes --outfile:c:\trace_processes.csv")
-        Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:diskio --outfile:c:\trace_diskio.csv")
-        Console.WriteLine("ETLReports.exe --infile:'c:\trace with space in name.etl' --processor:cpusample --outfile:'c:\trace cpusample.csv'")
+        Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:processes --outfolder:c:\")
+        Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:diskio --outfolder:c:\")
+        Console.WriteLine("ETLReports.exe --infile:'c:\trace with space in name.etl' --processor:cpusample --outfolder:'c:\'")
+        Console.WriteLine("ETLReports.exe --infile:c:\trace.etl --processor:minifilter --ms:15 --measure --outfolder:c:\")
         Console.WriteLine("")
-        Console.WriteLine("* Only 1 <REPORTTYPE> can be specified each run. Run multiple times for more reports.")
+        Console.WriteLine("* Only 1 <processor> can be specified each run. Run multiple times for more reports.")
         End
     End Sub
 
