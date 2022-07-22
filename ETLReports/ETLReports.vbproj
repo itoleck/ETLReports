@@ -4,6 +4,9 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>ETLReports</RootNamespace>
     <TargetFramework>netcoreapp3.1</TargetFramework>
+    <Authors>Chad Schultz</Authors>
+    <Description>Produces .csv files from .etl files based on processor selected.</Description>
+    <Version>0.0.1</Version>
   </PropertyGroup>
 
   <ItemGroup>

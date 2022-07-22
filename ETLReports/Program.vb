@@ -105,12 +105,17 @@ Module Program
                 ShowHelp()
             End If
 
-            If (Path.GetDirectoryName(outputfolder).Intersect(Path.GetInvalidPathChars()).Any() Or Not Directory.Exists(outputfolder)) Then
-                Console.WriteLine("Output folder not valid. " + outputfolder)
+            Try
+                If (Path.GetDirectoryName(outputfolder).Intersect(Path.GetInvalidPathChars()).Any() Or Not Directory.Exists(outputfolder)) Then
+                    Console.WriteLine("Output folder not valid. " + outputfolder)
+                    ShowHelp()
+                Else
+                    File.Delete(outputfolder + Path.GetFileNameWithoutExtension(filename) + "_" + processor + ".csv")
+                End If
+            Catch ex As Exception
+                Console.WriteLine("Folder not found. " + filename)
                 ShowHelp()
-            Else
-                File.Delete(outputfolder + Path.GetFileNameWithoutExtension(filename) + "_" + processor + ".csv")
-            End If
+            End Try
 
             If Nothing = filename Then
                 Console.WriteLine("No filename specified.")
@@ -149,7 +154,7 @@ Module Program
 
         outputfile = (outputfolder + Path.GetFileNameWithoutExtension(filename) + "_" + processor + ".csv")
 
-        Select Case processor
+        Select Case processor.ToLower
             Case "processes"
                 Processes()
             Case "tasks"
