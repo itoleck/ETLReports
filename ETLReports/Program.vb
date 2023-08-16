@@ -1034,9 +1034,9 @@ Module Program
                         End If
 
                         Try
-                            If Nothing <> diskio.IOType Then
-                                iotype = diskio.IOType
-                            End If
+                            'If Nothing <> diskio.IOType Then 'Misses disk reads does 0 = Nothing? Yes, it does seem so.
+                            iotype = diskio.IOType
+                            'End If
                         Catch ex As Exception
                             iserror = True
                         End Try
