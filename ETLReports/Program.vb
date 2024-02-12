@@ -14,6 +14,7 @@ Imports Microsoft.Windows.EventTracing.ScheduledTasks
 Imports Microsoft.Windows.EventTracing.Services
 Imports Microsoft.Windows.EventTracing.Symbols
 Imports Microsoft.Diagnostics.Tracing
+Imports Microsoft.Diagnostics.Tracing.Parsers.MicrosoftWindowsTCPIP
 
 Module Program
 
@@ -187,6 +188,8 @@ Module Program
                 BootPhases()
             Case "processzombies"
                 ProcessZombies()
+            Case "cpucontextswitch"
+                CpuContextSwitch()
             Case Else
                 Console.ForegroundColor = ConsoleColor.Red
                 Console.WriteLine("No processor `" + processor + "` found.")
@@ -201,6 +204,148 @@ Module Program
 
     End Sub
 
+    Private Sub CpuContextSwitch()
+        Using wr As New StreamWriter(outputfile, True)
+            wr.WriteLine("CPU" + "," + "In_PID" + "," + "In_TID" + "," + "In_Pri" + "," + "In_Wait" + "," + "In_Quantum" + "," + "In_QOS" + "," + "Out_PID" + "," + "Out_TID" + "," + "Out_Pri" + "," + "Out_Quantum" + "," + "Out_QOS")
+            Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
+
+                Try
+                    Console.WriteLine("Loading symbols...")
+                    Dim pendingsymbolData As IPendingResult(Of ISymbolDataSource) = trace.UseSymbols
+                    Dim pendingData As IPendingResult(Of ICpuSchedulingDataSource) = trace.UseCpuSchedulingData
+
+                    Console.WriteLine("Processing file: " + filename)
+                    trace.Process()
+
+                    Dim symbolData As ISymbolDataSource = pendingsymbolData.Result
+                    Dim traceData As ICpuSchedulingDataSource = pendingData.Result
+
+                    symbolData.LoadSymbolsAsync(SymCachePath.Automatic, SymbolPath.Automatic).GetAwaiter.GetResult()
+
+                    Dim count As Int32 = 1
+                    Dim iserror As Boolean = False
+
+                    Dim cs_cpu As Int32 = -1
+                    Dim cs_in_pid = -1
+                    Dim cs_in_pri = -1
+                    Dim cs_in_tid = -1
+                    Dim cs_in_wait = -1
+                    Dim cs_in_quantum = -1
+                    Dim cs_in_qos = -1
+
+                    Dim cs_out_pid = -1
+                    Dim cs_out_pri = -1
+                    Dim cs_out_tid = -1
+                    Dim cs_out_quantum = -1
+                    Dim cs_out_qos = -1
+
+                    For Each contextswitchinfo As IContextSwitch In traceData.ContextSwitches
+
+                        cs_cpu = contextswitchinfo.Processor
+
+                        Try
+                            cs_in_pid = contextswitchinfo.SwitchIn.Process.Id
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_in_pri = contextswitchinfo.SwitchIn.Priority
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_in_tid = contextswitchinfo.SwitchIn.ThreadId
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_in_wait = contextswitchinfo.SwitchIn.WaitTime.Value.TotalMilliseconds
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_in_quantum = contextswitchinfo.SwitchIn.Quantum
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_in_qos = contextswitchinfo.SwitchIn.ThreadQualityOfService
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_out_pid = contextswitchinfo.SwitchOut.Process.Id
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_out_pri = contextswitchinfo.SwitchOut.Priority
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_out_tid = contextswitchinfo.SwitchOut.ThreadId
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_out_quantum = contextswitchinfo.SwitchOut.Quantum
+                        Catch ex As Exception
+
+                        End Try
+
+                        Try
+                            cs_out_qos = contextswitchinfo.SwitchOut.ThreadQualityOfService
+                        Catch ex As Exception
+
+                        End Try
+
+                        If measureruntime Then
+                            Console.CursorTop = 3
+                            Console.CursorLeft = 0
+                            Console.Write("Events Processed: " + count.ToString)
+                        End If
+
+                        wr.WriteLine(cs_cpu.ToString() + "," + cs_in_pid.ToString() + "," + cs_in_tid.ToString() + "," + cs_in_pri.ToString() + "," + cs_in_wait.ToString() + "," + cs_in_quantum.ToString() + "," + cs_in_qos.ToString() + "," + cs_out_pid.ToString() + "," + cs_out_tid.ToString() + "," + cs_out_pri.ToString() + "," + cs_out_quantum.ToString() + "," + cs_out_qos.ToString())
+                        wr.Flush()
+
+                        count += 1
+
+                        cs_cpu = -1
+                        cs_in_pid = -1
+                        cs_in_pri = -1
+                        cs_in_tid = -1
+                        cs_in_wait = -1
+                        cs_in_quantum = -1
+                        cs_in_qos = -1
+
+                        cs_out_pid = -1
+                        cs_out_pri = -1
+                        cs_out_tid = -1
+                        cs_out_quantum = -1
+                        cs_out_qos = -1
+
+                    Next
+
+
+                Catch ex As Exception
+                    Console.ForegroundColor = ConsoleColor.Red
+                    Console.WriteLine(ex.Message)
+                    'ShowHelp()
+                End Try
+
+            End Using
+        End Using
+    End Sub
     Private Sub CpuSample(ShowIdle As Boolean)
         Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("Process" + "," + "PID" + "," + "ParentPID" + "," + "TID" + "," + "Priority" + "," + "CPU" + "," + "User" + "," + "IsDPC" + "," + "IsISR" + "," + "Function" + "," + "Weight")
@@ -247,15 +392,21 @@ Module Program
                             pname = cpuinfo.Process.ImageName.ToString()
                         End If
 
-                        pid = cpuinfo.Process.Id.ToString()
+                        If cpuinfo.Process.Id.ToString() IsNot Nothing Then
+                            pid = cpuinfo.Process.Id.ToString()
+                        End If
 
-                        p_pid = cpuinfo.Process.ParentId.ToString()
+                        If cpuinfo.Process.ParentId.ToString() IsNot Nothing Then
+                            p_pid = cpuinfo.Process.ParentId.ToString()
+                        End If
 
                         If cpuinfo.Process.User.Value IsNot Nothing Then
                             user = cpuinfo.Process.User.Value
                         End If
 
-                        pri = cpuinfo.Priority.ToString()
+                        If cpuinfo.Priority IsNot Nothing Then
+                            pri = cpuinfo.Priority.ToString()
+                        End If
 
                         If cpuinfo.IsExecutingDeferredProcedureCall IsNot Nothing Then
                             dpc = cpuinfo.IsExecutingDeferredProcedureCall.ToString()
@@ -265,9 +416,13 @@ Module Program
                             isr = cpuinfo.IsExecutingInterruptServicingRoutine.ToString()
                         End If
 
-                        proc = cpuinfo.Processor.ToString()
+                        If cpuinfo.Processor.ToString() IsNot Nothing Then
+                            proc = cpuinfo.Processor.ToString()
+                        End If
 
-                        tid = cpuinfo.Thread.Id.ToString()
+                        If cpuinfo.Thread.Id.ToString() IsNot Nothing Then
+                            tid = cpuinfo.Thread.Id.ToString()
+                        End If
 
                         'If StackWalk is not captured skip
                         'TODO
@@ -967,7 +1122,7 @@ Module Program
 
     Private Sub DiskIO()
         Using wr As New StreamWriter(outputfile, True)
-            wr.WriteLine("""" + "Disk" + """,""" + "Path" + """,""" + "DiskDuration-us" + """,""" + "DiskStackDuration-us" + """,""" + "FilterandQueDuration-us" + """,""" + "IOSizeBytes" + """,""" + "DiskBandwidthBytes-Calculated" + """,""" + "DiskStackBandwidthBytes-Calculated" + """,""" + "IOType" + """,""" + "CommandLine" + """,""" + "Thread" + """,""" + "IOPriority" + """,""" + "QueueDepthInit" + """,""" + "QueueDepthComplete" + """")
+            wr.WriteLine("""" + "Disk" + """,""" + "Path" + """,""" + "DiskDuration-us" + """,""" + "DiskStackDuration-us" + """,""" + "FilterandQueDuration-us" + """,""" + "IOSizeBytes" + """,""" + "DiskBandwidthBytes-Calculated" + """,""" + "DiskStackBandwidthBytes-Calculated" + """,""" + "IOType" + """,""" + "ProcessID" + """,""" + "ThreadID" + """,""" + "IOPriority" + """,""" + "QueueDepthInit" + """,""" + "QueueDepthComplete" + """")
             Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
                 Try
                     Dim pendingDiskData As IPendingResult(Of IDiskActivityDataSource) = trace.UseDiskIOData()
@@ -982,7 +1137,7 @@ Module Program
                     Dim iosize As Int64 = -1
                     Dim disksvcduration As Int64 = -1
                     Dim iotype As Int16 = -1
-                    Dim ioprocess As String = ""
+                    Dim ioprocess As Int32 = -1
                     Dim iothread As Int32 = -1
                     Dim iopriority As Int16 = -1
                     Dim qdepthinit As Int32 = -1
@@ -1042,8 +1197,8 @@ Module Program
                         End Try
 
                         Try
-                            If Nothing <> diskio.IssuingProcess.CommandLine Then
-                                ioprocess = diskio.IssuingProcess.CommandLine.Trim("""")
+                            If Nothing <> diskio.IssuingProcess.Id Then
+                                ioprocess = diskio.IssuingProcess.Id
                             End If
                         Catch ex As Exception
 
@@ -1094,7 +1249,7 @@ Module Program
                         End If
 
                         If iserror = False Then
-                            wr.WriteLine("""" + disknum.ToString() + """,""" + path.ToString() + """,""" + disksvcduration.ToString() + """,""" + ioduration.ToString() + """,""" + filterduration.ToString() + """,""" + iosize.ToString() + """,""" + diskbandwidth.ToString() + """,""" + stackbandwidth.ToString() + """,""" + iotype.ToString() + """,""" + ioprocess.Trim("""").ToString() + """,""" + iothread.ToString() + """,""" + iopriority.ToString() + """,""" + qdepthinit.ToString() + """,""" + qdepthcomplete.ToString() + """")
+                            wr.WriteLine("""" + disknum.ToString() + """,""" + path.ToString() + """,""" + disksvcduration.ToString() + """,""" + ioduration.ToString() + """,""" + filterduration.ToString() + """,""" + iosize.ToString() + """,""" + diskbandwidth.ToString() + """,""" + stackbandwidth.ToString() + """,""" + iotype.ToString() + """,""" + ioprocess.ToString() + """,""" + iothread.ToString() + """,""" + iopriority.ToString() + """,""" + qdepthinit.ToString() + """,""" + qdepthcomplete.ToString() + """")
                             wr.Flush()
 
                         Else
@@ -1109,7 +1264,7 @@ Module Program
                         disksvcduration = -1
                         iosize = -1
                         iotype = -1
-                        ioprocess = ""
+                        ioprocess = -1
                         iothread = -1
                         iopriority = -1
                         qdepthinit = -1
