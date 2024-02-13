@@ -3,15 +3,16 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <RootNamespace>ETLReports</RootNamespace>
-    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <TargetFramework>net6.0</TargetFramework>
     <Authors>Chad Schultz</Authors>
     <Description>Produces .csv files from .etl files based on processor selected.</Description>
     <Version>0.0.2</Version>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.4" />
-    <PackageReference Include="Microsoft.Windows.EventTracing.Processing.All" Version="1.12.9" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.8" />
+    <PackageReference Include="Microsoft.Windows.EventTracing.Processing.All" Version="1.12.10" />
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0" />
   </ItemGroup>
 
 </Project>

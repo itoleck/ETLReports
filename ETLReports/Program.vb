@@ -15,6 +15,7 @@ Imports Microsoft.Windows.EventTracing.Services
 Imports Microsoft.Windows.EventTracing.Symbols
 Imports Microsoft.Diagnostics.Tracing
 Imports Microsoft.Diagnostics.Tracing.Parsers.MicrosoftWindowsTCPIP
+Imports Microsoft.Diagnostics.Tracing.Parsers
 
 Module Program
 
@@ -26,7 +27,7 @@ Module Program
     Dim measureruntime As Boolean = False      'switch for showing trace processing stats in console
     Dim measurestart As DateTime = Now          'Time processing of .etl began
     Dim tracesettings As New TraceProcessorSettings     'Settings for allowing lost events and time inversion
-
+    Dim isBootTrace As Boolean = False
     Sub Main()
         Main(Environment.GetCommandLineArgs())
     End Sub
@@ -190,6 +191,9 @@ Module Program
                 ProcessZombies()
             Case "cpucontextswitch"
                 CpuContextSwitch()
+            Case "marks"
+                Marks()
+
             Case Else
                 Console.ForegroundColor = ConsoleColor.Red
                 Console.WriteLine("No processor `" + processor + "` found.")
@@ -346,6 +350,7 @@ Module Program
             End Using
         End Using
     End Sub
+
     Private Sub CpuSample(ShowIdle As Boolean)
         Using wr As New StreamWriter(outputfile, True)
             wr.WriteLine("Process" + "," + "PID" + "," + "ParentPID" + "," + "TID" + "," + "Priority" + "," + "CPU" + "," + "User" + "," + "IsDPC" + "," + "IsISR" + "," + "Function" + "," + "Weight")
@@ -2011,196 +2016,236 @@ Module Program
         End Using
     End Sub
 
+    Private Sub Marks()
+        ' Create TraceEventSource for reading the ETL file
+        Dim source As New ETWTraceEventSource(filename)
+
+        Dim parser As New KernelTraceEventParser(source)
+
+        ' Register callback for PerfInfoMark events
+        AddHandler parser.PerfInfoMark, AddressOf OnPerfInfoMarkEvent
+
+        ' Process all events in the file
+        source.Process()
+
+    End Sub
+
+    Private Sub OnPerfInfoMarkEvent(ByVal data As Microsoft.Diagnostics.Tracing.TraceEvent)
+        ' Extract and display relevant information
+        'Console.WriteLine($"Timestamp: {data.TimeStamp}")
+        'Console.WriteLine($"Value: {data.ToString}")
+        'Console.WriteLine($"ProcessName: {data.ProcessName}")
+        'Console.WriteLine("----")
+
+        If (data.ToString.ToLower.Contains("boot") Or data.ToString.ToLower.Contains("on/off")) Then
+            Console.WriteLine("Boot trace")
+            isBootTrace = True
+        End If
+
+    End Sub
+
     Private Sub BootPhases()
-        Using wr As New StreamWriter(outputfile, True)
-            wr.WriteLine("""" + "BootPhase" + """,""" + "Start" + """,""" + "End" + """,""" + "Duration" + """")
-            Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
-                Try
 
-                    Dim pendingProcessData As IPendingResult(Of IProcessDataSource) = trace.UseProcesses()
-                    Console.WriteLine("Processing file: " + filename)
-                    trace.Process()
-                    Dim processData As IProcessDataSource = pendingProcessData.Result
-                    Dim count As Int32 = 1
-                    Dim iserror As Boolean = False
-                    Dim phase As String = ""
-                    Dim starttime As Decimal = 0
-                    Dim endtime As Decimal = -1
+        Marks()
 
-                    Dim colcsrss As New Collection()
-                    Dim colsmss As New Collection()
-                    Dim colexplorer As New Collection()
-                    Dim collogonui As New Collection()
+        ' Check to see if the trace is a boot trace
+        If isBootTrace = True Then
+            Using wr As New StreamWriter(outputfile, True)
+                wr.WriteLine("""" + "BootPhase" + """,""" + "Start" + """,""" + "End" + """,""" + "Duration" + """")
+                Using trace As ITraceProcessor = TraceProcessor.Create(filename, tracesettings)
+                    Try
 
-                    For Each process As IProcess In processData.Processes
+                        Dim pendingProcessData As IPendingResult(Of IProcessDataSource) = trace.UseProcesses()
+                        Console.WriteLine("Processing file: " + filename)
+                        trace.Process()
+                        Dim processData As IProcessDataSource = pendingProcessData.Result
+                        Dim count As Int32 = 1
+                        Dim iserror As Boolean = False
+                        Dim phase As String = ""
+                        Dim starttime As Decimal = 0
+                        Dim endtime As Decimal = -1
 
-                        If measureruntime Then
-                            Console.CursorTop = 3
-                            Console.CursorLeft = 0
-                            Console.Write("Events Processed: " + count.ToString)
-                        End If
+                        Dim colcsrss As New Collection()
+                        Dim colsmss As New Collection()
+                        Dim colexplorer As New Collection()
+                        Dim collogonui As New Collection()
 
-                        Dim objcsrss As New BootPhase()
-                        Dim objsmss As New BootPhase()
-                        Dim objexplorer As New BootPhase()
-                        Dim objlogonui As New BootPhase()
+                        For Each process As IProcess In processData.Processes
 
-                        Select Case process.ImageName.ToString().ToLower()
-                            Case "csrss.exe"
-                                Try
-                                    starttime = process.CreateTime.Value.TotalSeconds
-                                Catch ex As Exception
+                            If measureruntime Then
+                                Console.CursorTop = 3
+                                Console.CursorLeft = 0
+                                Console.Write("Events Processed: " + count.ToString)
+                            End If
 
-                                End Try
+                            Dim objcsrss As New BootPhase()
+                            Dim objsmss As New BootPhase()
+                            Dim objexplorer As New BootPhase()
+                            Dim objlogonui As New BootPhase()
 
-                                Try
-                                    endtime = process.ExitTime.Value.TotalSeconds
-                                Catch ex As Exception
+                            Select Case process.ImageName.ToString().ToLower()
+                                Case "csrss.exe"
+                                    Try
+                                        starttime = process.CreateTime.Value.TotalSeconds
+                                    Catch ex As Exception
 
-                                End Try
+                                    End Try
 
-                                objcsrss.ProcessName = process.ImageName.ToString().ToLower()
-                                objcsrss.StartTime = starttime
-                                objcsrss.EndTime = endtime
+                                    Try
+                                        endtime = process.ExitTime.Value.TotalSeconds
+                                    Catch ex As Exception
 
-                                colcsrss.Add(objcsrss)
+                                    End Try
 
-                            Case "smss.exe"
-                                Try
-                                    starttime = process.CreateTime.Value.TotalSeconds
-                                Catch ex As Exception
+                                    objcsrss.ProcessName = process.ImageName.ToString().ToLower()
+                                    objcsrss.StartTime = starttime
+                                    objcsrss.EndTime = endtime
 
-                                End Try
+                                    colcsrss.Add(objcsrss)
 
-                                Try
-                                    endtime = process.ExitTime.Value.TotalSeconds
-                                Catch ex As Exception
+                                Case "smss.exe"
+                                    Try
+                                        starttime = process.CreateTime.Value.TotalSeconds
+                                    Catch ex As Exception
 
-                                End Try
+                                    End Try
 
-                                objsmss.ProcessName = process.ImageName.ToString().ToLower()
-                                objsmss.StartTime = starttime
-                                objsmss.EndTime = endtime
+                                    Try
+                                        endtime = process.ExitTime.Value.TotalSeconds
+                                    Catch ex As Exception
 
-                                colsmss.Add(objsmss)
+                                    End Try
 
-                            Case "explorer.exe"
-                                Try
-                                    starttime = process.CreateTime.Value.TotalSeconds
-                                Catch ex As Exception
+                                    objsmss.ProcessName = process.ImageName.ToString().ToLower()
+                                    objsmss.StartTime = starttime
+                                    objsmss.EndTime = endtime
 
-                                End Try
+                                    colsmss.Add(objsmss)
 
-                                Try
-                                    endtime = process.ExitTime.Value.TotalSeconds
-                                Catch ex As Exception
+                                Case "explorer.exe"
+                                    Try
+                                        starttime = process.CreateTime.Value.TotalSeconds
+                                    Catch ex As Exception
 
-                                End Try
+                                    End Try
 
-                                objexplorer.ProcessName = process.ImageName.ToString().ToLower()
-                                objexplorer.StartTime = starttime
-                                objexplorer.EndTime = endtime
+                                    Try
+                                        endtime = process.ExitTime.Value.TotalSeconds
+                                    Catch ex As Exception
 
-                                colexplorer.Add(objexplorer)
+                                    End Try
 
-                            Case "logonui.exe"
-                                Try
-                                    starttime = process.CreateTime.Value.TotalSeconds
-                                Catch ex As Exception
+                                    objexplorer.ProcessName = process.ImageName.ToString().ToLower()
+                                    objexplorer.StartTime = starttime
+                                    objexplorer.EndTime = endtime
 
-                                End Try
+                                    colexplorer.Add(objexplorer)
 
-                                Try
-                                    endtime = process.ExitTime.Value.TotalSeconds
-                                Catch ex As Exception
+                                Case "logonui.exe"
+                                    Try
+                                        starttime = process.CreateTime.Value.TotalSeconds
+                                    Catch ex As Exception
 
-                                End Try
+                                    End Try
 
-                                objlogonui.ProcessName = process.ImageName.ToString().ToLower()
-                                objlogonui.StartTime = starttime
-                                objlogonui.EndTime = endtime
+                                    Try
+                                        endtime = process.ExitTime.Value.TotalSeconds
+                                    Catch ex As Exception
 
-                                collogonui.Add(objlogonui)
+                                    End Try
 
-                        End Select
+                                    objlogonui.ProcessName = process.ImageName.ToString().ToLower()
+                                    objlogonui.StartTime = starttime
+                                    objlogonui.EndTime = endtime
 
-                        count += 1
-                        iserror = False
+                                    collogonui.Add(objlogonui)
 
-                    Next
+                            End Select
+
+                            count += 1
+                            iserror = False
+
+                        Next
 
 
-                    Dim lstcsrss As New List(Of BootPhase)(
-                        colcsrss.
-                        OfType(Of BootPhase).
-                        OrderBy(Function(l As BootPhase) l.StartTime))
+                        Dim lstcsrss As New List(Of BootPhase)(
+                            colcsrss.
+                            OfType(Of BootPhase).
+                            OrderBy(Function(l As BootPhase) l.StartTime))
 
-                    Dim lstsmss As New List(Of BootPhase)(
-                        colsmss.
-                        OfType(Of BootPhase).
-                        OrderBy(Function(l As BootPhase) l.StartTime))
+                        Dim lstsmss As New List(Of BootPhase)(
+                            colsmss.
+                            OfType(Of BootPhase).
+                            OrderBy(Function(l As BootPhase) l.StartTime))
 
-                    Dim lstexplorer As New List(Of BootPhase)(
-                        colexplorer.
-                        OfType(Of BootPhase).
-                        OrderBy(Function(l As BootPhase) l.StartTime))
+                        Dim lstexplorer As New List(Of BootPhase)(
+                            colexplorer.
+                            OfType(Of BootPhase).
+                            OrderBy(Function(l As BootPhase) l.StartTime))
 
-                    Dim lstlogonui As New List(Of BootPhase)(
-                        collogonui.
-                        OfType(Of BootPhase).
-                        OrderBy(Function(l As BootPhase) l.StartTime))
+                        Dim lstlogonui As New List(Of BootPhase)(
+                            collogonui.
+                            OfType(Of BootPhase).
+                            OrderBy(Function(l As BootPhase) l.StartTime))
 
-                    For Each l In lstsmss
-                        'wr.WriteLine("""" + l.ProcessName + """,""" + l.StartTime.ToString + """,""" + l.EndTime.ToString + """")
-                        'wr.Flush()
-                    Next
+                        For Each l In lstsmss
+                            'wr.WriteLine("""" + l.ProcessName + """,""" + l.StartTime.ToString + """,""" + l.EndTime.ToString + """")
+                            'wr.Flush()
+                        Next
 
-                    For Each l In lstcsrss
-                        'wr.WriteLine("""" + l.ProcessName + """,""" + l.StartTime.ToString + """,""" + l.EndTime.ToString + """")
-                        'wr.Flush()
-                    Next
+                        For Each l In lstcsrss
+                            'wr.WriteLine("""" + l.ProcessName + """,""" + l.StartTime.ToString + """,""" + l.EndTime.ToString + """")
+                            'wr.Flush()
+                        Next
 
-                    For Each l In lstexplorer
-                        'wr.WriteLine("""" + l.ProcessName + """,""" + l.StartTime.ToString + """,""" + l.EndTime.ToString + """")
-                        'wr.Flush()
-                    Next
+                        For Each l In lstexplorer
+                            'wr.WriteLine("""" + l.ProcessName + """,""" + l.StartTime.ToString + """,""" + l.EndTime.ToString + """")
+                            'wr.Flush()
+                        Next
 
-                    For Each l In lstlogonui
-                        'wr.WriteLine("""" + l.ProcessName + """,""" + l.StartTime.ToString + """,""" + l.EndTime.ToString + """")
-                        'wr.Flush()
-                    Next
+                        For Each l In lstlogonui
+                            'wr.WriteLine("""" + l.ProcessName + """,""" + l.StartTime.ToString + """,""" + l.EndTime.ToString + """")
+                            'wr.Flush()
+                        Next
 
-                    'Pre-Session
-                    Dim pre As String = lstsmss(0).StartTime.ToString
-                    Dim predur As Double = pre - 0
-                    wr.WriteLine("""" + "Pre-Session-Init" + """,""" + 0.ToString + """,""" + pre + """,""" + predur.ToString + """")
-                    wr.Flush()
+                        'Pre-Session
+                        Dim pre As String = lstsmss(0).StartTime.ToString
+                        Dim predur As Double = pre - 0
+                        wr.WriteLine("""" + "Pre-Session-Init" + """,""" + 0.ToString + """,""" + pre + """,""" + predur.ToString + """")
+                        wr.Flush()
 
-                    'Session
-                    Dim sess As String = lstcsrss(1).StartTime.ToString
-                    Dim sessdur As Double = sess - pre
-                    wr.WriteLine("""" + "Session-Init" + """,""" + pre + """,""" + sess + """,""" + sessdur.ToString + """")
-                    wr.Flush()
+                        'Session
+                        Dim sess As String = lstcsrss(1).StartTime.ToString
+                        Dim sessdur As Double = sess - pre
+                        wr.WriteLine("""" + "Session-Init" + """,""" + pre + """,""" + sess + """,""" + sessdur.ToString + """")
+                        wr.Flush()
 
-                    'WinLogon
-                    Dim winlog As String = lstexplorer(0).StartTime.ToString
-                    Dim winlogdur As Double = winlog - sess
-                    wr.WriteLine("""" + "WinLogon" + """,""" + sess + """,""" + winlog + """,""" + winlogdur.ToString + """")
-                    wr.Flush()
+                        'WinLogon
+                        Dim winlog As String = lstexplorer(0).StartTime.ToString
+                        Dim winlogdur As Double = winlog - sess
+                        wr.WriteLine("""" + "WinLogon" + """,""" + sess + """,""" + winlog + """,""" + winlogdur.ToString + """")
+                        wr.Flush()
 
-                    'Explorer
-                    Dim exp As String = lstlogonui.Last.EndTime.ToString
-                    Dim expdur As Double = exp - winlog
-                    wr.WriteLine("""" + "Explorer-Init" + """,""" + winlog + """,""" + exp + """,""" + expdur.ToString + """")
-                    wr.Flush()
+                        'Explorer
+                        Dim exp As String = lstlogonui.Last.EndTime.ToString
+                        Dim expdur As Double = exp - winlog
+                        wr.WriteLine("""" + "Explorer-Init" + """,""" + winlog + """,""" + exp + """,""" + expdur.ToString + """")
+                        wr.Flush()
 
-                Catch ex As Exception
-                    Console.ForegroundColor = ConsoleColor.Red
-                    Console.WriteLine(ex.Message)
-                    ShowHelp()
-                End Try
+                    Catch ex As Exception
+                        Console.ForegroundColor = ConsoleColor.Red
+                        Console.WriteLine(ex.Message)
+                        ShowHelp()
+                    End Try
+                End Using
             End Using
-        End Using
+        Else
+            Console.WriteLine("This file does not look to be a boot trace. Make sure there is a PerfInfoMark event with word 'Boot' in the trace..")
+            Console.WriteLine("A mark can be added to a trace using wpr.exe before saving and merging the running trace.")
+            Console.WriteLine("wpr.exe -marker ""This is a boot trace.""")
+        End If
+
+
     End Sub
 
     Private Sub ProcessZombies()
